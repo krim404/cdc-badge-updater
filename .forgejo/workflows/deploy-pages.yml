@@ -1,0 +1,93 @@
+name: Deploy Codeberg Pages
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: docker
+    container:
+      image: catthehacker/ubuntu:act-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Resolve version tag
+        id: version
+        env:
+          GIT_REF: ${{ github.ref }}
+        run: |
+          VERSION="${GIT_REF#refs/tags/}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble pages content
+        env:
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp web-flasher/index.html _site/
+          if [ -f web-flasher/badge.jpg ]; then cp web-flasher/badge.jpg _site/; fi
+
+          cp .pio/build/cdc_badge_updater/bootloader.bin _site/bootloader.bin
+          cp .pio/build/cdc_badge_updater/partitions.bin _site/partitions.bin
+          cp .pio/build/cdc_badge_updater/firmware.bin   _site/firmware.bin
+
+          cat > _site/manifest.json <<MANIFEST
+          {
+            "name": "CDC Badge Updater",
+            "version": "${TAG}",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin", "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          MANIFEST
+
+      - name: Push to pages branch
+        env:
+          TAG: ${{ steps.version.outputs.version }}
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CODEBERG_TOKEN:-}" ]; then
+            echo "CODEBERG_TOKEN secret is not set - cannot push to pages branch"
+            echo "Configure under Settings -> Secrets in the Codeberg repo"
+            exit 1
+          fi
+
+          cd _site
+          git init -b pages
+          git config user.email "actions@codeberg.org"
+          git config user.name  "Forgejo Actions"
+          git add -A
+          git commit -m "Deploy ${TAG}"
+          PUSH_URL="${REPO_URL#https://}"
+          PUSH_URL="https://x-access-token:${CODEBERG_TOKEN}@${PUSH_URL}.git"
+          git push --force "$PUSH_URL" pages:pages

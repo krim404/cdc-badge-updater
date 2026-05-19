@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "src/FactoryReset.cpp"
+        "src/SystemLock.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
+        esp_hw_support
+        nvs_flash
+        cdc_hal
+        cdc_log_uart
+)

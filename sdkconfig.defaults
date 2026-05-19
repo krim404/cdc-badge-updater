@@ -1,0 +1,57 @@
+# CDC Badge Updater - minimal sdkconfig
+
+# Main task stack
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+
+# Flash configuration
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHSIZE_DETECT=n
+
+# PSRAM (SPIRAM) configuration
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Serial console via ESP32-S3 built-in USB-Serial-JTAG (ROM CDC, no TinyUSB
+# needed). The badge has no external UART bridge, so UART0 alone would not
+# be reachable. The primary-console Kconfig "choice" requires the default
+# (UART) to be turned off explicitly before USJ can take its place.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y
+
+# Compile-time stripped to INFO so ESP-IDF spi_master / bus_lock VERBOSE/DEBUG
+# noise is removed entirely from the binary. esp_log_level_set() at runtime
+# can no longer raise individual tags above INFO with this setting.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+
+# Brownout detector enabled at highest sensitivity
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
+
+# Connectivity stacks explicitly OFF
+CONFIG_BT_ENABLED=n
+CONFIG_ESP_WIFI_ENABLED=n
+CONFIG_OPENTHREAD_ENABLED=n
+
+# Core dump to flash for crash analysis
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# E-Paper Display Pins (GDEY029T94, same as CDC Badge OS)
+CONFIG_EINK_SPI_MOSI=13
+CONFIG_EINK_SPI_CLK=12
+CONFIG_EINK_SPI_CS=41
+CONFIG_EINK_DC=45
+CONFIG_EINK_RST=46
+CONFIG_EINK_BUSY=42
+CONFIG_EINK_SPI_MISO=11

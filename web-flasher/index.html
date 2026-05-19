@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CDC Badge Updater - Web Flasher</title>
+  <script
+    type="module"
+    src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
+  ></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #f0883e;
+      --accent-hover: #ffa657;
+      --warning: #f85149;
+      --step-bg: #1c2128;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      max-width: 640px;
+      width: 100%;
+      padding: 2rem 1.5rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    header .subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    .version-badge {
+      display: inline-block;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 2rem;
+      padding: 0.25rem 0.85rem;
+      font-size: 0.85rem;
+      color: var(--accent);
+      margin-top: 0.75rem;
+    }
+
+    .version-badge.loading {
+      color: var(--text-muted);
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .card h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+
+    .steps {
+      list-style: none;
+      counter-reset: step;
+    }
+
+    .steps li {
+      counter-increment: step;
+      position: relative;
+      padding: 0.75rem 0.75rem 0.75rem 3rem;
+      background: var(--step-bg);
+      border-radius: 0.5rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+    }
+
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0.75rem;
+      top: 0.75rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .steps li strong {
+      color: var(--accent);
+    }
+
+    .notice {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-start;
+      padding: 0.75rem;
+      background: rgba(248, 81, 73, 0.12);
+      border: 1px solid rgba(248, 81, 73, 0.4);
+      border-radius: 0.5rem;
+      margin-top: 0.75rem;
+      font-size: 0.85rem;
+      color: var(--warning);
+    }
+
+    .notice-icon {
+      flex-shrink: 0;
+      font-size: 1.1rem;
+      line-height: 1.4;
+    }
+
+    .flash-section {
+      text-align: center;
+      padding: 2rem 1.5rem;
+    }
+
+    .flash-section p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 1.25rem;
+    }
+
+    esp-web-install-button {
+      display: inline-block;
+    }
+
+    esp-web-install-button button {
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 0.5rem;
+      padding: 0.85rem 2rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    esp-web-install-button button:hover {
+      background: var(--accent-hover);
+    }
+
+    .browser-warning {
+      display: none;
+      text-align: center;
+      padding: 1.5rem;
+      color: var(--warning);
+    }
+
+    .requirements {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .requirements ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+      margin-top: 0.5rem;
+    }
+
+    .requirements li {
+      margin-bottom: 0.25rem;
+    }
+
+    footer {
+      text-align: center;
+      padding: 1.5rem;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 480px) {
+      .container { padding: 1.25rem 1rem; }
+      header h1 { font-size: 1.4rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>CDC Badge Updater</h1>
+      <p class="subtitle">TROPIC01 Firmware Updater &amp; Factory Reset Tool</p>
+      <span class="version-badge loading" id="version-badge">Checking latest version...</span>
+    </header>
+
+    <div class="card" style="display: flex; gap: 1rem; align-items: center;">
+      <img src="badge.jpg" alt="CDC Badge v1.0" style="width: 80px; height: auto; border-radius: 0.5rem; flex-shrink: 0;">
+      <div>
+        <p style="font-size: 0.9rem; color: var(--text-muted);">
+          One-shot helper firmware for the
+          <strong style="color: var(--text);">TROPIC01-enhanced CDC Badge v1.0 / v1.1</strong> (ESP32-S3).
+          It does <strong style="color: var(--text);">two jobs</strong>:
+          update the TROPIC01 secure element firmware to the embedded
+          version, or perform a clean factory reset (NVS + TROPIC01 user
+          data) without writing new firmware. R-Config and pairing keys
+          stay untouched, so the chip remains addressable. After it
+          finishes, re-flash the normal CDC Badge OS.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>What this firmware does</h2>
+      <ol class="steps">
+        <li>Boots and shows <strong>STARTING</strong> on the e-paper.</li>
+        <li>Checks battery / USB power. Refuses to start if too low.</li>
+        <li>Erases NVS and all populated TROPIC01 ECC / R-Memory slots. Pairing keys (R-Config) are NOT touched.</li>
+        <li>Reads current TROPIC01 firmware version and shows it next to the embedded version.</li>
+        <li>Waits for <strong>Y</strong> (flash new firmware) or <strong>N</strong> (factory reset only) on the keypad.</li>
+        <li>On <strong>Y</strong>: rewrites TROPIC01 RISC-V and SPECT firmware. DO NOT POWER OFF. Shows <strong>SUCCESS</strong> or <strong>FAILED</strong>.</li>
+        <li>On <strong>N</strong>: skips firmware write and shows <strong>ABORTED</strong>. The wipe from step 3 has already happened, so the chip is in a clean state.</li>
+        <li>Halts. Reflash the normal CDC Badge OS to resume use.</li>
+      </ol>
+      <div class="notice">
+        <span class="notice-icon">!</span>
+        <span>
+          The TROPIC01 firmware update (option Y) is <strong>not interruptible</strong>. Power loss or reset
+          during step 6 can brick the secure element. Keep the badge on USB and the battery charged.
+          The factory-reset-only path (option N) carries no such risk.
+        </span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Enter Bootloader Mode</h2>
+      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.75rem;">
+        On the back of the badge, locate the <strong>FLASH</strong> and <strong>RESET</strong> buttons.
+      </p>
+      <ol class="steps">
+        <li>Press and <strong>hold FLASH</strong>.</li>
+        <li>While holding FLASH, press <strong>RESET</strong> once and release it.</li>
+        <li>Release <strong>FLASH</strong>.</li>
+        <li>After flashing, press <strong>RESET</strong> once to start the updater.</li>
+      </ol>
+    </div>
+
+    <div class="card flash-section">
+      <p>Connect the badge via USB, enter bootloader mode, then click the button below.</p>
+      <esp-web-install-button manifest="manifest.json">
+        <button slot="activate">Connect (Flash/Serial)</button>
+        <span slot="unsupported">
+          <div class="browser-warning" style="display: block;">
+            Your browser does not support Web Serial.<br>
+            Please use <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> (desktop).
+          </div>
+        </span>
+        <span slot="not-allowed">
+          <div class="browser-warning" style="display: block;">
+            Serial access was denied. Please grant permission and try again.
+          </div>
+        </span>
+      </esp-web-install-button>
+    </div>
+
+    <div class="card requirements">
+      <h2>Requirements</h2>
+      <ul>
+        <li>Google Chrome or Microsoft Edge (version 89+)</li>
+        <li>USB cable (data-capable, not charge-only)</li>
+        <li>Badge in bootloader mode (see steps above)</li>
+        <li>Battery charged or USB connected during the TROPIC01 update</li>
+      </ul>
+    </div>
+
+    <footer>
+      <a id="repo-link" href="#">CDC Badge Updater repository</a>
+    </footer>
+  </div>
+
+  <script>
+    const isCodeberg = location.hostname.endsWith("codeberg.page");
+    const githubRepo = "krim404/cdc-badge-updater";
+    const codebergRepo = "Krim/cdc-badge-updater";
+
+    document.getElementById("repo-link").href = isCodeberg
+      ? "https://codeberg.org/" + codebergRepo
+      : "https://github.com/" + githubRepo;
+
+    async function fetchLatestVersion() {
+      const badge = document.getElementById("version-badge");
+      const url = isCodeberg
+        ? "https://codeberg.org/api/v1/repos/" + codebergRepo + "/releases/latest"
+        : "https://api.github.com/repos/" + githubRepo + "/releases/latest";
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error("API request failed");
+        const data = await resp.json();
+        badge.textContent = data.tag_name || "unknown";
+        badge.classList.remove("loading");
+      } catch {
+        badge.textContent = "Version info unavailable";
+      }
+    }
+    fetchLatestVersion();
+  </script>
+</body>
+</html>

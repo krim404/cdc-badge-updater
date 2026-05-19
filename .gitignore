@@ -1,0 +1,48 @@
+# macOS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Build artifacts
+.pio/
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.cdc_badge_updater
+sdkconfig.old
+sdkconfig.*.old
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+.worktrees/
+
+# Patch marker files
+components/*/.patched
+
+# Backup/temp files
+*.bak
+*.orig
+*~
+
+# Logs
+*.log
+
+# Core dumps
+coredump.bin
+
+# Web flasher local test files
+web-flasher/*.bin
+web-flasher/manifest.json
+
+# Doxygen output
+doxygen_output/
+
+# Private Claude / AI scratch (not for public repo)
+agents.md
+.claude/
+find.md

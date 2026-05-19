@@ -1,0 +1,27 @@
+--- a/epdspi.cpp
++++ b/epdspi.cpp
+@@ -33,10 +33,10 @@ void EpdSpi::init(uint8_t frequency,bool debug){
+     gpio_set_level((gpio_num_t)CONFIG_EINK_RST, 1);
+
+     esp_err_t ret;
+-    // MISO not used, only Master to Slave
++    // MISO enabled for TROPIC01 on shared SPI bus
+     spi_bus_config_t buscfg={
+         .mosi_io_num=CONFIG_EINK_SPI_MOSI,
+-        .miso_io_num = -1,
++        .miso_io_num = CONFIG_EINK_SPI_MISO,
+         .sclk_io_num=CONFIG_EINK_SPI_CLK,
+         .quadwp_io_num=-1,
+         .quadhd_io_num=-1,
+@@ -62,7 +62,10 @@ void EpdSpi::init(uint8_t frequency,bool debug){
+
+     //Initialize the SPI bus
+     ret=spi_bus_initialize(EPD_HOST, &buscfg, DMA_CHAN);
+-    ESP_ERROR_CHECK(ret);
++    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
++        ESP_LOGE("EpdSpi", "SPI bus init failed: %d", ret);
++        return;
++    }
+
+     //Attach the EPD to the SPI bus
+     ret=spi_bus_add_device(EPD_HOST, &devcfg, &spi);

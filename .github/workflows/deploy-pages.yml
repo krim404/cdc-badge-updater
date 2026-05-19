@@ -1,0 +1,95 @@
+name: Deploy GitHub Pages
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main, release]
+    paths:
+      - '.github/workflows/deploy-pages.yml'
+      - 'web-flasher/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Get latest release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            TAG="$(gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || echo '')"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assemble site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp web-flasher/index.html _site/
+          if [ -f web-flasher/badge.jpg ]; then cp web-flasher/badge.jpg _site/; fi
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --repo "$REPO" --dir _site --pattern "*.bin"
+            mv "_site/cdc-badge-updater-bootloader-${TAG}.bin" _site/bootloader.bin
+            mv "_site/cdc-badge-updater-partitions-${TAG}.bin" _site/partitions.bin
+            mv "_site/cdc-badge-updater-firmware-${TAG}.bin"   _site/firmware.bin
+            cat > _site/manifest.json <<MANIFEST
+          {
+            "name": "CDC Badge Updater",
+            "version": "${TAG}",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin", "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          MANIFEST
+          else
+            echo "No release found yet, deploying web-flasher only without binaries"
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

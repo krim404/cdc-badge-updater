@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "src/EpaperDisplay.cpp"
+        "src/SpiBus.cpp"
+        "src/I2cBus.cpp"
+        "src/TCA9535Keypad.cpp"
+        "src/Tropic01Element.cpp"
+        "src/BQ25895Power.cpp"
+        "src/libtropic_port_esp32.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cdc_core
+        cdc_log_uart
+        driver
+        nvs_flash
+        freertos
+        esp_timer
+        CalEPD
+        libtropic_sdk
+        mbedtls
+)
