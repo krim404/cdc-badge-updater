@@ -1,0 +1,124 @@
+stages:
+  - build
+  - release
+  - deploy
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PLATFORMIO_CORE_DIR: "$CI_PROJECT_DIR/.cache/platformio"
+
+default:
+  image: python:3.11
+  cache:
+    key: "$CI_JOB_NAME"
+    paths:
+      - .cache/pip
+      - .cache/platformio
+
+.pio_setup:
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install platformio
+
+build:
+  stage: build
+  extends: .pio_setup
+  script:
+    - pio run
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="$CI_COMMIT_TAG"
+      else
+        VERSION="$CI_COMMIT_SHORT_SHA"
+      fi
+      echo "Building version: $VERSION"
+      echo "VERSION=$VERSION" >> build.env
+      mkdir -p artifacts
+      cp .pio/build/cdc_badge_updater/firmware.bin    "artifacts/cdc-badge-updater-firmware-${VERSION}.bin"
+      cp .pio/build/cdc_badge_updater/bootloader.bin  "artifacts/cdc-badge-updater-bootloader-${VERSION}.bin"
+      cp .pio/build/cdc_badge_updater/partitions.bin  "artifacts/cdc-badge-updater-partitions-${VERSION}.bin"
+  artifacts:
+    name: "cdc-badge-updater-firmware-$CI_COMMIT_REF_SLUG"
+    paths:
+      - artifacts/
+    reports:
+      dotenv: build.env
+    expire_in: 90 days
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH =~ /^(main|master|release|develop)$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+release:
+  stage: release
+  image: curlimages/curl:latest
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  script:
+    - |
+      set -e
+      base="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases"
+      art="${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/artifacts"
+      auth="JOB-TOKEN: ${CI_JOB_TOKEN}"
+      payload=$(cat <<JSON
+      {
+        "name": "${CI_COMMIT_TAG}",
+        "tag_name": "${CI_COMMIT_TAG}",
+        "description": "CDC Badge Updater ${CI_COMMIT_TAG}",
+        "assets": {
+          "links": [
+            { "name": "cdc-badge-updater-firmware-${CI_COMMIT_TAG}.bin", "url": "${art}/cdc-badge-updater-firmware-${CI_COMMIT_TAG}.bin?job=build", "link_type": "package" },
+            { "name": "cdc-badge-updater-bootloader-${CI_COMMIT_TAG}.bin", "url": "${art}/cdc-badge-updater-bootloader-${CI_COMMIT_TAG}.bin?job=build", "link_type": "package" },
+            { "name": "cdc-badge-updater-partitions-${CI_COMMIT_TAG}.bin", "url": "${art}/cdc-badge-updater-partitions-${CI_COMMIT_TAG}.bin?job=build", "link_type": "package" }
+          ]
+        }
+      }
+      JSON
+      )
+      code=$(curl -sS -o /tmp/rel.json -w "%{http_code}" --request POST --header "$auth" --header "Content-Type: application/json" --data "$payload" "$base")
+      echo "create release -> HTTP $code"
+      if [ "$code" = "409" ]; then
+        echo "release exists, updating metadata"
+        curl -sS --fail --request PUT --header "$auth" --header "Content-Type: application/json" \
+          --data "{\"name\":\"${CI_COMMIT_TAG}\",\"description\":\"CDC Badge Updater ${CI_COMMIT_TAG}\"}" \
+          "$base/${CI_COMMIT_TAG}" > /dev/null
+      elif [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+        cat /tmp/rel.json
+        exit 1
+      fi
+
+pages:
+  stage: deploy
+  needs:
+    - job: build
+      artifacts: true
+  script:
+    - mkdir -p public
+    - cp web-flasher/index.html public/
+    - if [ -f web-flasher/badge.jpg ]; then cp web-flasher/badge.jpg public/; fi
+    - cp "artifacts/cdc-badge-updater-bootloader-${CI_COMMIT_TAG}.bin" public/bootloader.bin
+    - cp "artifacts/cdc-badge-updater-partitions-${CI_COMMIT_TAG}.bin" public/partitions.bin
+    - cp "artifacts/cdc-badge-updater-firmware-${CI_COMMIT_TAG}.bin"   public/firmware.bin
+    - |
+      cat > public/manifest.json <<MANIFEST
+      {
+        "name": "CDC Badge Updater",
+        "version": "${CI_COMMIT_TAG}",
+        "builds": [
+          {
+            "chipFamily": "ESP32-S3",
+            "parts": [
+              { "path": "bootloader.bin", "offset": 0 },
+              { "path": "partitions.bin", "offset": 32768 },
+              { "path": "firmware.bin", "offset": 327680 }
+            ]
+          }
+        ]
+      }
+      MANIFEST
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'

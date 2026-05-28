@@ -318,14 +318,11 @@
 
     async function fetchLatestVersion() {
       const badge = document.getElementById("version-badge");
-      const url = isCodeberg
-        ? "https://codeberg.org/api/v1/repos/" + codebergRepo + "/releases/latest"
-        : "https://api.github.com/repos/" + githubRepo + "/releases/latest";
       try {
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error("API request failed");
+        const resp = await fetch("manifest.json");
+        if (!resp.ok) throw new Error("manifest request failed");
         const data = await resp.json();
-        badge.textContent = data.tag_name || "unknown";
+        badge.textContent = data.version || "unknown";
         badge.classList.remove("loading");
       } catch {
         badge.textContent = "Version info unavailable";

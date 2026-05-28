@@ -3,11 +3,6 @@ name: Deploy GitHub Pages
 on:
   release:
     types: [published]
-  push:
-    branches: [main, release]
-    paths:
-      - '.github/workflows/deploy-pages.yml'
-      - 'web-flasher/**'
   workflow_dispatch:
 
 permissions:
