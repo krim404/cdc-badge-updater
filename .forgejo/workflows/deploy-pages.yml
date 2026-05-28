@@ -69,25 +69,9 @@ jobs:
           }
           MANIFEST
 
-      - name: Push to pages branch
-        env:
-          TAG: ${{ steps.version.outputs.version }}
-          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CODEBERG_TOKEN:-}" ]; then
-            echo "CODEBERG_TOKEN secret is not set - cannot push to pages branch"
-            echo "Configure under Settings -> Secrets in the Codeberg repo"
-            exit 1
-          fi
-
-          cd _site
-          git init -b pages
-          git config user.email "actions@codeberg.org"
-          git config user.name  "Forgejo Actions"
-          git add -A
-          git commit -m "Deploy ${TAG}"
-          PUSH_URL="${REPO_URL#https://}"
-          PUSH_URL="https://x-access-token:${CODEBERG_TOKEN}@${PUSH_URL}.git"
-          git push --force "$PUSH_URL" pages:pages
+      - name: Deploy to Codeberg Pages
+        uses: https://codeberg.org/git-pages/action@v2
+        with:
+          site: 'https://${{ forge.repository_owner }}.codeberg.page/cdc-badge-updater/'
+          token: ${{ forge.token }}
+          source: _site/
