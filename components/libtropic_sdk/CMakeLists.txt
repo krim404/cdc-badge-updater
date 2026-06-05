@@ -8,15 +8,14 @@ set(LIBTROPIC_SRCS
     "${LIBTROPIC_ROOT}/src/libtropic_default_sh0_keys.c"
     "${LIBTROPIC_ROOT}/src/libtropic_l2.c"
     "${LIBTROPIC_ROOT}/src/libtropic_l3.c"
+    "${LIBTROPIC_ROOT}/src/libtropic_secure_memzero.c"
     "${LIBTROPIC_ROOT}/src/lt_asn1_der.c"
     "${LIBTROPIC_ROOT}/src/lt_crc16.c"
     "${LIBTROPIC_ROOT}/src/lt_hkdf.c"
     "${LIBTROPIC_ROOT}/src/lt_l1.c"
-    "${LIBTROPIC_ROOT}/src/lt_l1_port_wrap.c"
     "${LIBTROPIC_ROOT}/src/lt_l2_frame_check.c"
     "${LIBTROPIC_ROOT}/src/lt_l3_process.c"
-    "${LIBTROPIC_ROOT}/src/lt_random.c"
-    "${LIBTROPIC_ROOT}/src/lt_secure_memzero.c"
+    "${LIBTROPIC_ROOT}/src/lt_port_wrap.c"
     "${LIBTROPIC_ROOT}/src/lt_tr01_attrs.c"
 )
 
@@ -37,14 +36,15 @@ idf_component_register(
     REQUIRES mbedtls
 )
 
-# TROPIC01 silicon revision (ACAB = production silicon)
-target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    ACAB
+# TROPIC01 silicon revision (ACAB = production silicon).
+# PUBLIC so components including libtropic headers (cdc_hal) inherit it:
+# lt_l2_api_structs.h #errors unless a LT_SILICON_REV_* macro is defined.
+target_compile_definitions(${COMPONENT_LIB} PUBLIC
+    LT_SILICON_REV_ACAB
 )
 
-# libtropic logging: keep ERROR on so brick-relevant failures still surface,
-# disable DEBUG so the AES-GCM workaround trace (lt_aesgcm_decrypt parameter
-# dump) does not flood the serial console once the session is working.
+# libtropic logging: keep ERROR on so brick-relevant failures still surface;
+# WARN/INFO/DEBUG off to keep the serial console quiet.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     LT_LOG_ENABLE_ERROR=1
     LT_LOG_ENABLE_WARN=0

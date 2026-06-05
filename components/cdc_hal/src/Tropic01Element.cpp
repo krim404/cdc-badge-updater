@@ -19,6 +19,7 @@
 #include "cdc_hal/libtropic_port_esp32.h"
 #include "cdc_hal/hw_config.h"
 #include "cdc_hal/tropic01_fw_update.h"
+#include "cdc_hal/pairing_key_config.h"
 #include "cdc_core/SystemLock.h"
 #include "cdc_log.h"
 #include "esp_random.h"
@@ -33,6 +34,7 @@
 /** \brief libtropic headers (already guarded for C/C++ linkage). */
 #include "libtropic.h"
 #include "libtropic_common.h"
+#include "tropic01_bootloader_co.h"
 #include "libtropic_l2.h"
 #include "libtropic_l3.h"
 #include "libtropic_port.h"
@@ -42,10 +44,8 @@
 static const char* TAG = "TR01";
 static constexpr uint8_t RMEM_HEADER_MAGIC = 0xCD;
 
-/** \brief Pairing key material references (production slot 0). */
-#define PAIRING_KEY_PRIV sh0priv_prod0
-#define PAIRING_KEY_PUB sh0pub_prod0
-#define PAIRING_KEY_SLOT TR01_PAIRING_KEY_SLOT_INDEX_0
+// PAIRING_KEY_PRIV / PAIRING_KEY_PUB / PAIRING_KEY_SLOT come from
+// cdc_hal/pairing_key_config.h (build-time selectable, default production key).
 
 namespace cdc::hal {
 
@@ -109,7 +109,8 @@ public:
     // of which remain private.
     tropic01_fw_update_result_t performFwUpdate(const uint8_t *fw_cpu, uint16_t fw_cpu_size,
                                                 const uint8_t *fw_spect, uint16_t fw_spect_size,
-                                                int *lt_ret_out);
+                                                uint8_t expected_boot_major, uint8_t expected_boot_minor,
+                                                uint8_t expected_boot_patch, int *lt_ret_out);
 
 private:
     // Public-API helpers
@@ -985,20 +986,71 @@ ISecureElement* getSecureElementInstance() {
     return &g_secureElement;
 }
 
+namespace {
+
 /**
- * \brief Performs the TROPIC01 firmware-update sequence on this instance.
+ * \brief Opens a secure channel session using the build-selected pairing key.
  *
- * Member function so it can touch the private libtropic handle and the
- * shared SPI bus helpers. Caller (the Updater main) must:
- *   - have verified battery / USB power before invocation
- *   - have disabled any task watchdog covering this thread
- *   - not invoke any other secure-element operation in parallel
+ * Bus must be held. Deliberately bypasses the cached session flag because the
+ * reboots in the update flow invalidate the channel repeatedly.
+ */
+lt_ret_t startPairingSession(lt_handle_t *h) {
+    return lt_verify_chip_and_start_secure_session(h, PAIRING_KEY_PRIV, PAIRING_KEY_PUB,
+                                                   PAIRING_KEY_SLOT);
+}
+
+/**
+ * \brief Sets the R-Config[CFG_START_UP] Maintenance-Mode bit to \p desired.
  *
- * This function NEVER yields the bus mid-write. Power loss during the
- * critical phase can brick the device (libtropic docs).
+ * Read-modify-write of the whole R-Config (write-once per object), preserving
+ * every other object, then reboots to apply. No-op (no erase / reboot) when the
+ * bit is already in the desired state. Requires an active session; bus held.
+ * I-Config is never written.
+ *
+ * \return LT_OK on success, otherwise the failing libtropic return code.
+ */
+lt_ret_t applyMaintenanceMode(lt_handle_t *h, bool desired) {
+    lt_config_t cfg = {};
+    lt_ret_t ret = lt_read_whole_R_config(h, &cfg);
+    if (ret != LT_OK) {
+        return ret;
+    }
+    bool current =
+        (cfg.obj[TR01_CFG_START_UP_IDX] & BOOTLOADER_CO_CFG_START_UP_MAINTENANCE_ENA_MASK) != 0;
+    if (current == desired) {
+        return LT_OK;
+    }
+    ret = lt_r_config_erase(h);
+    if (ret != LT_OK) {
+        return ret;
+    }
+    if (desired) {
+        cfg.obj[TR01_CFG_START_UP_IDX] |= BOOTLOADER_CO_CFG_START_UP_MAINTENANCE_ENA_MASK;
+    } else {
+        cfg.obj[TR01_CFG_START_UP_IDX] &= ~BOOTLOADER_CO_CFG_START_UP_MAINTENANCE_ENA_MASK;
+    }
+    ret = lt_write_whole_R_config(h, &cfg);
+    if (ret != LT_OK) {
+        return ret;
+    }
+    return lt_reboot(h, TR01_REBOOT);
+}
+
+}  // namespace
+
+/**
+ * \brief Hardened TROPIC01 firmware update + Maintenance-Mode lockdown.
+ *
+ * Full sequence and contract: see tropic01_fw_update.h. Member function so it
+ * can touch the private libtropic handle and the SPI bus helpers. Holds the bus
+ * for the whole sequence and NEVER yields it mid-write; power loss in the
+ * critical phase can brick the device.
  */
 tropic01_fw_update_result_t Tropic01Element::performFwUpdate(const uint8_t *fw_cpu, uint16_t fw_cpu_size,
                                                               const uint8_t *fw_spect, uint16_t fw_spect_size,
+                                                              uint8_t expected_boot_major,
+                                                              uint8_t expected_boot_minor,
+                                                              uint8_t expected_boot_patch,
                                                               int *lt_ret_out) {
     if (lt_ret_out) {
         *lt_ret_out = LT_OK;
@@ -1020,66 +1072,122 @@ tropic01_fw_update_result_t Tropic01Element::performFwUpdate(const uint8_t *fw_c
     LOG_W(TAG, "==== TROPIC01 FW-UPDATE: ENTERING CRITICAL PHASE ====");
     LOG_W(TAG, "DO NOT POWER OFF, DO NOT RESET");
 
-    LOG_I(TAG, "FW-Update step 1: reboot to MAINTENANCE mode");
-    lt_ret_t ret = lt_reboot(&handle_, TR01_MAINTENANCE_REBOOT);
+    // Step 1: secure session (required to read I-/R-Config).
+    LOG_I(TAG, "FW-Update step 1: opening secure session");
+    lt_ret_t ret = startPairingSession(&handle_);
+    if (ret != LT_OK) {
+        LOG_E(TAG, "Secure session failed: %s", lt_ret_verbose(ret));
+        if (lt_ret_out) *lt_ret_out = ret;
+        releaseBus();
+        return TROPIC01_FW_UPDATE_SESSION_FAILED;
+    }
+
+    // Step 2: I-Config is READ-ONLY (OTP). Confirm Maintenance Mode is permitted.
+    uint32_t iCfgStartup = 0;
+    ret = lt_i_config_read(&handle_, TR01_CFG_START_UP_ADDR, &iCfgStartup);
+    if (ret != LT_OK) {
+        LOG_E(TAG, "I-Config read failed: %s", lt_ret_verbose(ret));
+        if (lt_ret_out) *lt_ret_out = ret;
+        releaseBus();
+        return TROPIC01_FW_UPDATE_RCONFIG_FAILED;
+    }
+    if (!(iCfgStartup & BOOTLOADER_CO_CFG_START_UP_MAINTENANCE_ENA_MASK)) {
+        LOG_E(TAG, "Maintenance Mode forbidden by I-Config (OTP) - cannot update");
+        releaseBus();
+        return TROPIC01_FW_UPDATE_MAINTENANCE_NOT_ALLOWED;
+    }
+
+    // Step 3: ensure Maintenance Mode is enabled in R-Config (transiently if cdc-badge-os
+    // or a prior run disabled it). Session may end here (reboot to apply).
+    LOG_I(TAG, "FW-Update step 3: ensuring Maintenance Mode enabled in R-Config");
+    ret = applyMaintenanceMode(&handle_, true);
+    if (ret != LT_OK) {
+        LOG_E(TAG, "Enable Maintenance Mode failed: %s", lt_ret_verbose(ret));
+        if (lt_ret_out) *lt_ret_out = ret;
+        releaseBus();
+        return TROPIC01_FW_UPDATE_RCONFIG_FAILED;
+    }
+
+    // Step 4: safety gate - enter Maintenance Mode and verify the bootloader version
+    // matches the embedded blobs' target BEFORE any write (wrong target can brick).
+    LOG_I(TAG, "FW-Update step 4: reboot to MAINTENANCE, verify bootloader");
+    ret = lt_reboot(&handle_, TR01_MAINTENANCE_REBOOT);
     if (ret != LT_OK) {
         LOG_E(TAG, "MAINTENANCE reboot failed: %s", lt_ret_verbose(ret));
         if (lt_ret_out) *lt_ret_out = ret;
         releaseBus();
         return TROPIC01_FW_UPDATE_REBOOT_MAINTENANCE_FAILED;
     }
-
-    LOG_I(TAG, "FW-Update step 2: writing RISC-V CPU firmware (%u bytes)", fw_cpu_size);
-    ret = lt_do_mutable_fw_update(&handle_, fw_cpu, fw_cpu_size, TR01_FW_BANK_FW1);
+    uint8_t blVer[TR01_L2_GET_INFO_RISCV_FW_SIZE] = {0};
+    ret = lt_get_info_riscv_fw_ver(&handle_, blVer);
     if (ret != LT_OK) {
-        LOG_E(TAG, "CPU FW update failed: %s", lt_ret_verbose(ret));
+        LOG_E(TAG, "Bootloader version read failed: %s", lt_ret_verbose(ret));
         if (lt_ret_out) *lt_ret_out = ret;
         releaseBus();
-        return TROPIC01_FW_UPDATE_CPU_FAILED;
+        return TROPIC01_FW_UPDATE_BOOTLOADER_MISMATCH;
     }
-    LOG_I(TAG, "CPU FW: OK");
+    uint8_t blMajor = blVer[3] & 0x7f;
+    uint8_t blMinor = blVer[2];
+    uint8_t blPatch = blVer[1];
+    LOG_I(TAG, "Bootloader %u.%u.%u (expecting %u.%u.%u)",
+          blMajor, blMinor, blPatch, expected_boot_major, expected_boot_minor, expected_boot_patch);
+    if (blMajor != expected_boot_major || blMinor != expected_boot_minor ||
+        blPatch != expected_boot_patch) {
+        LOG_E(TAG, "Bootloader mismatch - embedded blobs target a different bootloader. ABORT (no write)");
+        releaseBus();
+        return TROPIC01_FW_UPDATE_BOOTLOADER_MISMATCH;
+    }
 
-#ifdef ABAB
-    LOG_I(TAG, "FW-Update step 2b (ABAB): writing CPU firmware to bank 2");
-    ret = lt_do_mutable_fw_update(&handle_, fw_cpu, fw_cpu_size, TR01_FW_BANK_FW2);
+    // Step 5: update BOTH FW bank pairs. The helper reboots to Maintenance Mode
+    // between bank pairs, version-validates, then reboots to Application Mode.
+    LOG_I(TAG, "FW-Update step 5: writing RISC-V %u B + SPECT %u B (both bank pairs)",
+          static_cast<unsigned>(fw_cpu_size), static_cast<unsigned>(fw_spect_size));
+    ret = lt_do_mutable_fw_update(&handle_, fw_cpu, fw_cpu_size, fw_spect, fw_spect_size);
     if (ret != LT_OK) {
-        LOG_E(TAG, "CPU FW bank2 update failed: %s", lt_ret_verbose(ret));
+        LOG_E(TAG, "FW update failed: %s (Maintenance Mode left enabled for retry)",
+              lt_ret_verbose(ret));
         if (lt_ret_out) *lt_ret_out = ret;
         releaseBus();
-        return TROPIC01_FW_UPDATE_CPU_FAILED;
+        return TROPIC01_FW_UPDATE_FAILED;
     }
-#endif
+    LOG_I(TAG, "FW write OK (both bank pairs, internally version-validated)");
 
-    LOG_I(TAG, "FW-Update step 3: writing SPECT firmware (%u bytes)", fw_spect_size);
-    ret = lt_do_mutable_fw_update(&handle_, fw_spect, fw_spect_size, TR01_FW_BANK_SPECT1);
+    // Best-effort: log the booted versions (the helper already verified them).
+    uint8_t rv[TR01_L2_GET_INFO_RISCV_FW_SIZE] = {0};
+    uint8_t sv[TR01_L2_GET_INFO_SPECT_FW_SIZE] = {0};
+    if (lt_get_info_riscv_fw_ver(&handle_, rv) == LT_OK &&
+        lt_get_info_spect_fw_ver(&handle_, sv) == LT_OK) {
+        LOG_I(TAG, "Booted RISC-V %u.%u.%u  SPECT %u.%u.%u",
+              rv[3], rv[2], rv[1], sv[3], sv[2], sv[1]);
+    }
+
+    // Step 6: disable Maintenance Mode (ODR_TR01_SA_2026012900 mitigation) and verify
+    // it is no longer reachable.
+    LOG_I(TAG, "FW-Update step 6: disabling Maintenance Mode in R-Config");
+    ret = startPairingSession(&handle_);
     if (ret != LT_OK) {
-        LOG_E(TAG, "SPECT FW update failed: %s", lt_ret_verbose(ret));
+        LOG_E(TAG, "Post-update session failed: %s", lt_ret_verbose(ret));
         if (lt_ret_out) *lt_ret_out = ret;
         releaseBus();
-        return TROPIC01_FW_UPDATE_SPECT_FAILED;
+        return TROPIC01_FW_UPDATE_MAINTENANCE_DISABLE_FAILED;
     }
-    LOG_I(TAG, "SPECT FW: OK");
-
-#ifdef ABAB
-    LOG_I(TAG, "FW-Update step 3b (ABAB): writing SPECT firmware to bank 2");
-    ret = lt_do_mutable_fw_update(&handle_, fw_spect, fw_spect_size, TR01_FW_BANK_SPECT2);
+    ret = applyMaintenanceMode(&handle_, false);
     if (ret != LT_OK) {
-        LOG_E(TAG, "SPECT FW bank2 update failed: %s", lt_ret_verbose(ret));
+        LOG_E(TAG, "Disable Maintenance Mode failed: %s", lt_ret_verbose(ret));
         if (lt_ret_out) *lt_ret_out = ret;
         releaseBus();
-        return TROPIC01_FW_UPDATE_SPECT_FAILED;
+        return TROPIC01_FW_UPDATE_MAINTENANCE_DISABLE_FAILED;
     }
-#endif
-
-    LOG_I(TAG, "FW-Update step 4: reboot to APPLICATION mode");
-    ret = lt_reboot(&handle_, TR01_REBOOT);
-    if (ret != LT_OK) {
-        LOG_E(TAG, "APPLICATION reboot failed: %s", lt_ret_verbose(ret));
+    ret = lt_reboot(&handle_, TR01_MAINTENANCE_REBOOT);
+    if (ret != LT_L2_RESP_DISABLED) {
+        LOG_E(TAG, "Maintenance Mode still reachable after disable (ret=%s)", lt_ret_verbose(ret));
         if (lt_ret_out) *lt_ret_out = ret;
         releaseBus();
-        return TROPIC01_FW_UPDATE_REBOOT_APP_FAILED;
+        return TROPIC01_FW_UPDATE_MAINTENANCE_DISABLE_FAILED;
     }
+    LOG_I(TAG, "Maintenance Mode disabled and verified unreachable");
 
+    sessionActive_.store(false, std::memory_order_release);
     releaseBus();
     LOG_W(TAG, "==== TROPIC01 FW-UPDATE: CRITICAL PHASE COMPLETE ====");
     return TROPIC01_FW_UPDATE_OK;
@@ -1092,8 +1200,11 @@ tropic01_fw_update_result_t Tropic01Element::performFwUpdate(const uint8_t *fw_c
  */
 extern "C" tropic01_fw_update_result_t tropic01_perform_fw_update(const uint8_t *fw_cpu, uint16_t fw_cpu_size,
                                                                   const uint8_t *fw_spect, uint16_t fw_spect_size,
+                                                                  uint8_t expected_boot_major,
+                                                                  uint8_t expected_boot_minor,
+                                                                  uint8_t expected_boot_patch,
                                                                   int *lt_ret_out) {
-    return cdc::hal::g_secureElement.performFwUpdate(fw_cpu, fw_cpu_size,
-                                                     fw_spect, fw_spect_size,
-                                                     lt_ret_out);
+    return cdc::hal::g_secureElement.performFwUpdate(fw_cpu, fw_cpu_size, fw_spect, fw_spect_size,
+                                                     expected_boot_major, expected_boot_minor,
+                                                     expected_boot_patch, lt_ret_out);
 }

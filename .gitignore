@@ -24,6 +24,9 @@ cmake-build-*/
 # Patch marker files
 components/*/.patched
 
+# Custom TROPIC01 pairing key (never commit real keys)
+components/cdc_hal/include/cdc_hal/pairing_key_custom.h
+
 # Backup/temp files
 *.bak
 *.orig

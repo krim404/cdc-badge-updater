@@ -416,15 +416,14 @@ extern "C" void app_main() {
           static_cast<unsigned>(tropic_fw_cpu_size),
           static_cast<unsigned>(tropic_fw_spect_size));
     LOG_I(TAG, "Sequence would be:");
-    LOG_I(TAG, "  1. sessionEnd()");
-    LOG_I(TAG, "  2. acquireBus()");
-    LOG_I(TAG, "  3. lt_reboot(TR01_MAINTENANCE_REBOOT)");
-    LOG_I(TAG, "  4. lt_do_mutable_fw_update(fw_CPU, %u, TR01_FW_BANK_FW1)",
-          static_cast<unsigned>(tropic_fw_cpu_size));
-    LOG_I(TAG, "  5. lt_do_mutable_fw_update(fw_SPECT, %u, TR01_FW_BANK_SPECT1)",
+    LOG_I(TAG, "  1. open secure session (pairing key)");
+    LOG_I(TAG, "  2. read I-Config (maintenance permitted?)");
+    LOG_I(TAG, "  3. enable Maintenance Mode in R-Config if needed");
+    LOG_I(TAG, "  4. reboot to MAINTENANCE, verify bootloader %s", TROPIC_FW_BOOT_VERSION);
+    LOG_I(TAG, "  5. lt_do_mutable_fw_update(fw_CPU %u B, fw_SPECT %u B, both bank pairs)",
+          static_cast<unsigned>(tropic_fw_cpu_size),
           static_cast<unsigned>(tropic_fw_spect_size));
-    LOG_I(TAG, "  6. lt_reboot(TR01_REBOOT)");
-    LOG_I(TAG, "  7. releaseBus()");
+    LOG_I(TAG, "  6. disable Maintenance Mode in R-Config + verify unreachable");
     vTaskDelay(pdMS_TO_TICKS(3000));
     LOG_W(TAG, "==== DRY-RUN: simulated FW update complete ====");
 #else
@@ -434,23 +433,32 @@ extern "C" void app_main() {
     esp_task_wdt_deinit();
     LOG_I(TAG, "Watchdog disabled for FW-update window");
 
+    // Expected bootloader version of the embedded blobs (safety gate inside the update).
+    unsigned eb[3] = {0, 0, 0};
+    sscanf(TROPIC_FW_BOOT_VERSION, "%u.%u.%u", &eb[0], &eb[1], &eb[2]);
+
     int lt_ret = 0;
     tropic01_fw_update_result_t fw_res = tropic01_perform_fw_update(
         fw_CPU,   static_cast<uint16_t>(tropic_fw_cpu_size),
         fw_SPECT, static_cast<uint16_t>(tropic_fw_spect_size),
+        static_cast<uint8_t>(eb[0]), static_cast<uint8_t>(eb[1]), static_cast<uint8_t>(eb[2]),
         &lt_ret);
 
     if (fw_res != TROPIC01_FW_UPDATE_OK) {
         char detail[96];
         const char *stage = "?";
         switch (fw_res) {
-            case TROPIC01_FW_UPDATE_BUS_FAILED:                 stage = "SPI bus";           break;
-            case TROPIC01_FW_UPDATE_REBOOT_MAINTENANCE_FAILED:  stage = "maint reboot";      break;
-            case TROPIC01_FW_UPDATE_CPU_FAILED:                 stage = "CPU FW write";      break;
-            case TROPIC01_FW_UPDATE_SPECT_FAILED:               stage = "SPECT FW write";    break;
-            case TROPIC01_FW_UPDATE_REBOOT_APP_FAILED:          stage = "app reboot";        break;
-            case TROPIC01_FW_UPDATE_PARAM_ERR:                  stage = "param";             break;
-            default:                                            stage = "unknown";           break;
+            case TROPIC01_FW_UPDATE_BUS_FAILED:                 stage = "SPI bus";            break;
+            case TROPIC01_FW_UPDATE_SESSION_FAILED:             stage = "secure session";     break;
+            case TROPIC01_FW_UPDATE_MAINTENANCE_NOT_ALLOWED:    stage = "maint not allowed";  break;
+            case TROPIC01_FW_UPDATE_RCONFIG_FAILED:             stage = "R-Config";           break;
+            case TROPIC01_FW_UPDATE_REBOOT_MAINTENANCE_FAILED:  stage = "maint reboot";       break;
+            case TROPIC01_FW_UPDATE_BOOTLOADER_MISMATCH:        stage = "bootloader mismatch"; break;
+            case TROPIC01_FW_UPDATE_FAILED:                     stage = "FW write";           break;
+            case TROPIC01_FW_UPDATE_MAINTENANCE_DISABLE_FAILED: stage = "maint disable";      break;
+            case TROPIC01_FW_UPDATE_REBOOT_APP_FAILED:          stage = "app reboot";         break;
+            case TROPIC01_FW_UPDATE_PARAM_ERR:                  stage = "param";              break;
+            default:                                            stage = "unknown";            break;
         }
         std::snprintf(detail, sizeof(detail), "%s\nlt_ret=%d", stage, lt_ret);
         LOG_E(TAG, "FW-Update failed at %s (lt_ret=%d)", stage, lt_ret);
