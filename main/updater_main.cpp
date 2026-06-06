@@ -7,7 +7,7 @@
  * user for confirmation on the e-paper, then performs the TROPIC01 firmware
  * update with the embedded blobs.
  *
- * Boot phases (see plan.md for context):
+ * Boot phases:
  *   PHASE 0 - System init (NVS handle, I2C, Power, Display, Keypad)
  *   PHASE 1 - Power validation (battery >= 3.6V or USB present)
  *   PHASE 2 - TROPIC01 init + secure session
