@@ -106,7 +106,7 @@ Output binaries: `.pio/build/cdc_badge_updater/{bootloader,partitions,firmware}.
 
 ## Version
 
-`v0.1.0` initial release.
+`v0.2.0` current release. `v0.1.0` was the initial release.
 
 ## License
 
