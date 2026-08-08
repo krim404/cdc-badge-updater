@@ -57,7 +57,7 @@ jobs:
           cp .pio/build/cdc_badge_updater/partitions.bin  "artifacts/cdc-badge-updater-partitions-${VERSION}.bin"
 
       - name: Upload firmware artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cdc-badge-updater-firmware-${{ steps.version.outputs.version }}
           path: artifacts/
@@ -76,7 +76,7 @@ jobs:
         run: echo "version=${GIT_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cdc-badge-updater-firmware-${{ steps.version.outputs.version }}
           path: artifacts/
