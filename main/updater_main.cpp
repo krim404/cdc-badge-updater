@@ -65,6 +65,9 @@ static constexpr const char *MODE_BANNER = "LIVE FLASH MODE";
 static constexpr uint16_t EPD_BLACK_COLOR = 0x0000;
 static constexpr uint16_t EPD_WHITE_COLOR = 0xFFFF;
 
+/** \brief Buffer size for a "MAJ.MIN.PAT" firmware version string. */
+static constexpr size_t FW_VERSION_STR_LEN = 12;
+
 using cdc::hal::IDisplay;
 using cdc::hal::IKeypad;
 using cdc::hal::IPowerManager;
@@ -127,6 +130,17 @@ static void drawScreen(IDisplay *display, const char *title, const char *body) {
         drawScreen(display, "FAILED", reason);
     }
     deepSleepForever();
+}
+
+/**
+ * \brief Formats a TROPIC01 version array as "MAJ.MIN.PAT".
+ *
+ * \param buf Destination buffer, at least FW_VERSION_STR_LEN bytes.
+ * \param len Size of buf.
+ * \param ver Version array laid out as {reserved, patch, minor, major}.
+ */
+static void fmtFwVersion(char *buf, size_t len, const uint8_t ver[4]) {
+    std::snprintf(buf, len, "%u.%u.%u", ver[3], ver[2], ver[1]);
 }
 
 /**
@@ -203,12 +217,17 @@ extern "C" void app_main() {
     esp_log_level_set("EpaperDisplay",  ESP_LOG_INFO);
     esp_log_level_set("EpdSpi",         ESP_LOG_INFO);
 
+    char emb_riscv[FW_VERSION_STR_LEN];
+    char emb_spect[FW_VERSION_STR_LEN];
+    fmtFwVersion(emb_riscv, sizeof(emb_riscv), fw_CPU_ver);
+    fmtFwVersion(emb_spect, sizeof(emb_spect), fw_SPECT_ver);
+
     LOG_I(TAG, "============================================");
     LOG_I(TAG, "== CDC Badge Updater v%s", APP_VERSION);
     LOG_I(TAG, "== Mode: %s", MODE_BANNER);
     LOG_I(TAG, "== Embedded TROPIC01 FW:");
     LOG_I(TAG, "==   boot %s, RISC-V %s, SPECT %s",
-          TROPIC_FW_BOOT_VERSION, TROPIC_FW_RISCV_VERSION, TROPIC_FW_SPECT_VERSION);
+          TROPIC_FW_BOOT_VERSION, emb_riscv, emb_spect);
     LOG_I(TAG, "============================================");
 
     // ----- PHASE 0a: NVS, I2C, Power (no UI yet) -----
@@ -368,8 +387,7 @@ extern "C" void app_main() {
     LOG_I(TAG, "Current  RISC-V %u.%u.%u.%u  SPECT %u.%u.%u.%u",
           cur_riscv[3], cur_riscv[2], cur_riscv[1], cur_riscv[0],
           cur_spect[3], cur_spect[2], cur_spect[1], cur_spect[0]);
-    LOG_I(TAG, "Embedded RISC-V %s  SPECT %s",
-          TROPIC_FW_RISCV_VERSION, TROPIC_FW_SPECT_VERSION);
+    LOG_I(TAG, "Embedded RISC-V %s  SPECT %s", emb_riscv, emb_spect);
 
     // ----- PHASE 5: User confirmation -----
     char body[160];
@@ -378,14 +396,14 @@ extern "C" void app_main() {
                   "DRY-RUN MODE\nCur %u.%u.%u/%u.%u.%u\nNew %s/%s\n[Y] Simulate [N] Skip",
                   cur_riscv[3], cur_riscv[2], cur_riscv[1],
                   cur_spect[3], cur_spect[2], cur_spect[1],
-                  TROPIC_FW_RISCV_VERSION, TROPIC_FW_SPECT_VERSION);
+                  emb_riscv, emb_spect);
     drawScreen(display, "DRY-RUN?", body);
 #else
     std::snprintf(body, sizeof(body),
                   "Cur %u.%u.%u/%u.%u.%u\nNew %s/%s\n[Y] Update  [N] Skip",
                   cur_riscv[3], cur_riscv[2], cur_riscv[1],
                   cur_spect[3], cur_spect[2], cur_spect[1],
-                  TROPIC_FW_RISCV_VERSION, TROPIC_FW_SPECT_VERSION);
+                  emb_riscv, emb_spect);
     drawScreen(display, "FW UPDATE?", body);
 #endif
     LOG_I(TAG, "PHASE 5 awaiting Y/N");
@@ -494,7 +512,7 @@ extern "C" void app_main() {
         char ok_body[64];
         std::snprintf(ok_body, sizeof(ok_body),
                       "RISC-V %s\nSPECT %s\nReflash normal FW",
-                      TROPIC_FW_RISCV_VERSION, TROPIC_FW_SPECT_VERSION);
+                      emb_riscv, emb_spect);
         drawScreen(display, "SUCCESS", ok_body);
         deepSleepForever();
     }
@@ -506,15 +524,13 @@ extern "C" void app_main() {
           new_riscv[3], new_riscv[2], new_riscv[1], new_riscv[0],
           new_spect[3], new_spect[2], new_spect[1], new_spect[0]);
 
-    // Cross-check against embedded version bytes parsed from TROPIC_FW_*_VERSION
-    // (format "MAJ.MIN.PAT"). Any mismatch is reported as FAILED so the user
-    // can re-run the updater instead of trusting a silent SUCCESS.
-    unsigned ev_rv[3] = {0, 0, 0};
-    unsigned ev_sp[3] = {0, 0, 0};
-    sscanf(TROPIC_FW_RISCV_VERSION, "%u.%u.%u", &ev_rv[0], &ev_rv[1], &ev_rv[2]);
-    sscanf(TROPIC_FW_SPECT_VERSION, "%u.%u.%u", &ev_sp[0], &ev_sp[1], &ev_sp[2]);
-    bool match = (new_riscv[3] == ev_rv[0] && new_riscv[2] == ev_rv[1] && new_riscv[1] == ev_rv[2]
-               && new_spect[3] == ev_sp[0] && new_spect[2] == ev_sp[1] && new_spect[1] == ev_sp[2]);
+    // Cross-check against the embedded blobs' version arrays. Any mismatch is
+    // reported as FAILED so the user can re-run the updater instead of trusting
+    // a silent SUCCESS.
+    bool match = (new_riscv[3] == fw_CPU_ver[3] && new_riscv[2] == fw_CPU_ver[2]
+               && new_riscv[1] == fw_CPU_ver[1]
+               && new_spect[3] == fw_SPECT_ver[3] && new_spect[2] == fw_SPECT_ver[2]
+               && new_spect[1] == fw_SPECT_ver[1]);
 
     char ok_body[112];
     if (match) {
@@ -529,8 +545,7 @@ extern "C" void app_main() {
                       "Mismatch:\nGot RISC-V %u.%u.%u\nGot SPECT %u.%u.%u",
                       new_riscv[3], new_riscv[2], new_riscv[1],
                       new_spect[3], new_spect[2], new_spect[1]);
-        LOG_E(TAG, "PHASE 7 version mismatch (expected %s / %s)",
-              TROPIC_FW_RISCV_VERSION, TROPIC_FW_SPECT_VERSION);
+        LOG_E(TAG, "PHASE 7 version mismatch (expected %s / %s)", emb_riscv, emb_spect);
         drawScreen(display, "FAILED", ok_body);
     }
 

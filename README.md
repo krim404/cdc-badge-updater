@@ -26,11 +26,11 @@ untouched - the chip stays addressable, no out-of-band tooling required.
 | Component         | Version |
 |-------------------|---------|
 | Bootloader        | 2.0.1   |
-| RISC-V CPU FW     | 2.0.0   |
-| SPECT FW          | 1.0.0   |
+| RISC-V CPU FW     | 2.1.0   |
+| SPECT FW          | 1.3.0   |
 
-Source: `third_party/libtropic` submodule, directory
-`TROPIC01_fw_update_files/boot_v_2_0_1/fw_v_2_0_0/`.
+Source: `third_party/libtropic` submodule (v4.1.0), directory
+`TROPIC01_fw_update_files/boot_v_2_0_1/fw_v_2_1_0/`.
 
 ## Web Flasher
 
